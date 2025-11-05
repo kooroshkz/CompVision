@@ -244,7 +244,10 @@ def main(args):
                             num_workers=num_workers,
                             shuffle=False)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu') # Setup for my mac
+    print(f"Using device: {device}")
+
 
     model = MyConv(num_classes=len(miniplaces_train.label_dict))
                    
