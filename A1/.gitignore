@@ -1,6 +1,6 @@
 .DS_Store
 venv/
 images/
-
+data/
+objects/
 *.tar.gz
-data.tar.gz

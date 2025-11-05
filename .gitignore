@@ -1,2 +1,22 @@
-# Ignore all data folders in any subdirectory
-**/data/
+# Data directories
+data/
+objects/
+*/data/
+*/objects/
+
+# Virtual environments
+venv/
+env/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Compressed files
+*.tar.gz
+*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
