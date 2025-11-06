@@ -1,5 +1,9 @@
 import os
 import csv
+import platform
+import socket
+import psutil
+import subprocess
 from tqdm import tqdm
 import torch
 import argparse
@@ -7,6 +11,135 @@ import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
+
+
+class HardwareDetector:
+    """Automatically detect hardware and optimize training configuration"""
+    
+    def __init__(self):
+        self.hostname = socket.gethostname()
+        self.cpu_count = psutil.cpu_count(logical=True)
+        self.memory_gb = psutil.virtual_memory().total / (1024**3)
+        self.gpu_info = self._detect_gpus()
+        self.device_type = self._detect_device_type()
+        
+    def _detect_gpus(self):
+        """Detect available GPUs"""
+        gpu_info = {'count': 0, 'names': [], 'memory_gb': []}
+        
+        if torch.cuda.is_available():
+            gpu_info['count'] = torch.cuda.device_count()
+            for i in range(gpu_info['count']):
+                props = torch.cuda.get_device_properties(i)
+                gpu_info['names'].append(props.name)
+                gpu_info['memory_gb'].append(props.total_memory / (1024**3))
+        
+        return gpu_info
+    
+    def _detect_device_type(self):
+        """Determine the best device to use"""
+        if torch.cuda.is_available():
+            return 'cuda'
+        elif torch.backends.mps.is_available():
+            return 'mps'
+        else:
+            return 'cpu'
+    
+    def get_optimal_config(self):
+        """Get optimized configuration based on hardware"""
+        config = {
+            'device': self.device_type,
+            'batch_size': 32,
+            'num_workers': 2,
+            'num_epochs': 10,
+            'learning_rate': 0.001,
+            'weight_decay': 0.01,
+            'use_mixed_precision': False,
+            'use_ddp': False,
+            'pin_memory': False
+        }
+        
+                # MacBook Pro M3 Max (MPS) Configuration
+        if self.device_type == 'mps':
+            config.update({
+                'batch_size': 128,
+                'num_workers': 8,
+                'num_epochs': 15,
+                'learning_rate': 0.002,
+                'weight_decay': 0.05,
+                'pin_memory': False  # MPS doesn't support pin_memory
+            })
+            print("🍎 Detected MacBook Pro with Apple Silicon - Optimizing for MPS")
+        
+        # Linux Server with RTX 3090s Configuration
+        elif self.device_type == 'cuda' and self.gpu_info['count'] >= 2:
+            # Dual RTX 3090 setup
+            if any('3090' in name for name in self.gpu_info['names']):
+                config.update({
+                    'batch_size': 256,  # Large batch for 24GB VRAM per GPU
+                    'num_workers': 16,  # High parallelism for 48-core CPU
+                    'num_epochs': 20,
+                    'learning_rate': 0.003,  # Higher LR for larger batch
+                    'weight_decay': 0.05,
+                    'use_mixed_precision': True,  # FP16 for faster training
+                    'use_ddp': True,  # Multi-GPU training
+                    'pin_memory': True
+                })
+                print(f"🚀 Detected Linux Server with {self.gpu_info['count']}x RTX 3090 - Optimizing for multi-GPU")
+        
+        # Single CUDA GPU Configuration
+        elif self.device_type == 'cuda' and self.gpu_info['count'] == 1:
+            memory_gb = self.gpu_info['memory_gb'][0] if self.gpu_info['memory_gb'] else 8
+            if memory_gb >= 20:  # High-end GPU (3090, 4090, etc.)
+                config.update({
+                    'batch_size': 160,
+                    'num_workers': 12,
+                    'num_epochs': 15,
+                    'learning_rate': 0.002,
+                    'use_mixed_precision': True,
+                    'pin_memory': True
+                })
+            elif memory_gb >= 10:  # Mid-range GPU
+                config.update({
+                    'batch_size': 96,
+                    'num_workers': 8,
+                    'num_epochs': 12,
+                    'learning_rate': 0.0015,
+                    'use_mixed_precision': True
+                })
+            print(f"🎮 Detected single GPU: {self.gpu_info['names'][0] if self.gpu_info['names'] else 'Unknown'}")
+        
+        # CPU-only Configuration
+        else:
+            config.update({
+                'batch_size': 32,
+                'num_workers': min(self.cpu_count, 8),
+                'num_epochs': 8,
+                'learning_rate': 0.001
+            })
+            print("💻 Using CPU-only configuration")
+        
+        # Memory-based adjustments
+        if self.memory_gb < 16:
+            config['batch_size'] = min(config['batch_size'], 64)
+            config['num_workers'] = min(config['num_workers'], 4)
+        
+        print(f"📊 Hardware Summary:")
+        print(f"   Hostname: {self.hostname}")
+        print(f"   CPU: {self.cpu_count} cores")
+        print(f"   Memory: {self.memory_gb:.1f} GB")
+        print(f"   GPU: {self.gpu_info['count']} x {self.gpu_info['names'][0] if self.gpu_info['names'] else 'None'}")
+        print(f"   Device: {self.device_type}")
+        print(f"⚙️  Training Config:")
+        print(f"   Batch Size: {config['batch_size']}")
+        print(f"   Workers: {config['num_workers']}")
+        print(f"   Epochs: {config['num_epochs']}")
+        print(f"   Learning Rate: {config['learning_rate']}")
+        print(f"   Mixed Precision: {config['use_mixed_precision']}")
+        print(f"   Multi-GPU: {config['use_ddp']}")
+        print()
+        
+        return config
 
 
 class MiniPlaces(Dataset):
@@ -270,12 +403,15 @@ class ResidualBlock(nn.Module):
 def mixup_data(x, y, alpha=1.0, device='cpu'):
     """Apply mixup augmentation to a batch of data"""
     if alpha > 0:
-        lam = torch.distributions.Beta(alpha, alpha).sample().to(device)
+        lam = torch.distributions.Beta(alpha, alpha).sample()
+        if isinstance(device, str):
+            device = torch.device(device)
+        lam = lam.to(device)
     else:
         lam = 1
 
     batch_size = x.size(0)
-    index = torch.randperm(batch_size).to(device)
+    index = torch.randperm(batch_size, device=device)
 
     mixed_x = lam * x + (1 - lam) * x[index, :]
     y_a, y_b = y, y[index]
@@ -384,6 +520,193 @@ def evaluate(model, test_loader, criterion, device):
     
     return avg_loss, accuracy
 
+def train_with_config(model, train_loader, val_loader, optimizer, criterion, scheduler, 
+                     device, config, scaler=None, use_mixup=True, mixup_alpha=0.4):
+    """
+    Advanced training function with hardware-adaptive configuration
+    """
+    model = model.to(device)
+    best_accuracy = 0.0
+    num_epochs = config['num_epochs']
+    use_mixed_precision = config['use_mixed_precision']
+    
+    for epoch in range(num_epochs):
+        model.train()
+
+        with tqdm(total=len(train_loader),
+                  desc=f'Epoch {epoch +1}/{num_epochs}',
+                  position=0,
+                  leave=True) as pbar:
+            for inputs, labels in train_loader:
+                inputs = inputs.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+
+                optimizer.zero_grad()
+
+                # Mixed precision training
+                if use_mixed_precision and scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        # Apply mixup augmentation
+                        if use_mixup and torch.rand(1) < 0.5:
+                            inputs, targets_a, targets_b, lam = mixup_data(inputs, labels, mixup_alpha, device)
+                            logits = model(inputs)
+                            loss = mixup_criterion(criterion, logits, targets_a, targets_b, lam)
+                        else:
+                            logits = model(inputs)
+                            loss = criterion(logits, labels)
+                    
+                    # Backward pass with gradient scaling
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    # Standard precision training
+                    if use_mixup and torch.rand(1) < 0.5:
+                        inputs, targets_a, targets_b, lam = mixup_data(inputs, labels, mixup_alpha, device)
+                        logits = model(inputs)
+                        loss = mixup_criterion(criterion, logits, targets_a, targets_b, lam)
+                    else:
+                        logits = model(inputs)
+                        loss = criterion(logits, labels)
+                    
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+
+                # Update progress bar
+                pbar.update(1)
+                pbar.set_postfix(loss=loss.item())
+                
+                # Step OneCycleLR scheduler every batch
+                if isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                    scheduler.step()
+
+            # Evaluation
+            avg_loss, accuracy = evaluate(model, val_loader, criterion, device)
+            print(f'Validation set: Average loss = {avg_loss:.4f}, Accuracy = {accuracy:.4f}')
+            
+            # Save best model
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                save_dict = {
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'accuracy': accuracy,
+                    'epoch': epoch,
+                    'config': config
+                }
+                torch.save(save_dict, 'best_model.ckpt')
+                print(f'🎯 New best accuracy: {accuracy:.4f}')
+            
+        # Step other schedulers once per epoch
+        if not isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
+            scheduler.step()
+    
+    print(f"🏆 Training completed! Best accuracy: {best_accuracy:.4f}")
+
+
+def train_with_config(model, train_loader, val_loader, optimizer, criterion, scheduler, 
+                     device, config, use_mixup=True, mixup_alpha=0.4):
+    """
+    Enhanced training function with mixed precision support and adaptive configuration
+    """
+    # Place the model on device
+    model = model.to(device)
+    best_accuracy = 0.0
+    
+    # Setup mixed precision training for CUDA
+    scaler = None
+    if config['use_mixed_precision'] and device.type == 'cuda':
+        scaler = torch.amp.GradScaler('cuda')
+        print("🚀 Using mixed precision training (FP16)")
+    
+    # Setup DataParallel for multi-GPU (only if not already wrapped)
+    if config['use_ddp'] and torch.cuda.device_count() > 1 and not isinstance(model, nn.DataParallel):
+        model = nn.DataParallel(model)
+        print(f"🔥 Using DataParallel with {torch.cuda.device_count()} GPUs")
+    
+    for epoch in range(config['num_epochs']):
+        model.train()
+
+        with tqdm(total=len(train_loader),
+                  desc=f'Epoch {epoch + 1}/{config["num_epochs"]}',
+                  position=0,
+                  leave=True) as pbar:
+            for inputs, labels in train_loader:
+                inputs = inputs.to(device, non_blocking=config.get('pin_memory', False))
+                labels = labels.to(device, non_blocking=config.get('pin_memory', False))
+
+                optimizer.zero_grad()
+
+                # Apply mixup augmentation
+                if use_mixup and torch.rand(1) < 0.5:
+                    inputs, targets_a, targets_b, lam = mixup_data(inputs, labels, mixup_alpha, device)
+                    
+                    # Forward pass with mixed precision
+                    if scaler is not None:
+                        with torch.amp.autocast('cuda'):
+                            logits = model(inputs)
+                            loss = mixup_criterion(criterion, logits, targets_a, targets_b, lam)
+                        scaler.scale(loss).backward()
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        logits = model(inputs)
+                        loss = mixup_criterion(criterion, logits, targets_a, targets_b, lam)
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        optimizer.step()
+                else:
+                    # Normal training with mixed precision
+                    if scaler is not None:
+                        with torch.amp.autocast('cuda'):
+                            logits = model(inputs)
+                            loss = criterion(logits, labels)
+                        scaler.scale(loss).backward()
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        logits = model(inputs)
+                        loss = criterion(logits, labels)
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        optimizer.step()
+
+                pbar.update(1)
+                pbar.set_postfix(loss=loss.item())
+                
+                # Step OneCycleLR scheduler every batch
+                if isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                    scheduler.step()
+
+            # Evaluation after each epoch
+            avg_loss, accuracy = evaluate(model, val_loader, criterion, device)
+            print(f'Validation set: Average loss = {avg_loss:.4f}, Accuracy = {accuracy:.4f}')
+            
+            # Save best model
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                model_to_save = model.module if hasattr(model, 'module') else model
+                torch.save({'model_state_dict': model_to_save.state_dict(),
+                           'optimizer_state_dict': optimizer.state_dict(),
+                           'accuracy': accuracy,
+                           'config': config}, 'best_model.ckpt')
+                print(f'New best accuracy: {accuracy:.4f}')
+            
+        # Step other schedulers once per epoch (if not OneCycleLR)
+        if not isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
+            scheduler.step()
+    
+    print(f"Training completed! Best accuracy: {best_accuracy:.4f}")
+    return best_accuracy
+
+
 def train(model, train_loader, val_loader, optimizer, criterion, scheduler, device,
           num_epochs, use_mixup=True, mixup_alpha=0.4):
     """
@@ -490,6 +813,13 @@ def test(model, test_loader, device):
     return all_preds
 
 def main(args):
+    # Initialize hardware detector and get optimal configuration
+    detector = HardwareDetector()
+    config = detector.get_optimal_config()
+    
+    # Set device
+    device = torch.device(config['device'])
+    
     image_net_mean = torch.Tensor([0.485, 0.456, 0.406])
     image_net_std = torch.Tensor([0.229, 0.224, 0.225])
     
@@ -525,64 +855,67 @@ def main(args):
                                 transform=val_transform,
                                 label_dict=miniplaces_train.label_dict)
 
-    # Create the dataloaders
-    
-    # Define the batch size and number of workers (optimized for stable training)
-    batch_size = 128  # Increased back for more stable gradients
-    num_workers = 8   # Keep high for better CPU utilization
-
-    # Create DataLoader for training and validation sets
+    # Create DataLoaders with adaptive configuration
     train_loader = DataLoader(miniplaces_train,
-                              batch_size=batch_size,
-                              num_workers=num_workers,
-                              shuffle=True)
+                              batch_size=config['batch_size'],
+                              num_workers=config['num_workers'],
+                              shuffle=True,
+                              pin_memory=config['pin_memory'])
     val_loader = DataLoader(miniplaces_val,
-                            batch_size=batch_size,
-                            num_workers=num_workers,
-                            shuffle=False)
+                            batch_size=config['batch_size'],
+                            num_workers=config['num_workers'],
+                            shuffle=False,
+                            pin_memory=config['pin_memory'])
 
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu') # Setup for my mac
-    print(f"Using device: {device}")
-
-
+    # Initialize model
     model = MyConv(num_classes=len(miniplaces_train.label_dict))
-                   
-
+    
+    # Adaptive optimizer configuration
     optimizer = torch.optim.AdamW(model.parameters(), 
-                                  lr=0.002,   # Slightly higher learning rate
-                                  weight_decay=0.05,  # Increased weight decay for better regularization
+                                  lr=config['learning_rate'],
+                                  weight_decay=config['weight_decay'],
                                   betas=(0.9, 0.999))
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)  # Moderate label smoothing
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     
-    # Advanced learning rate scheduler with warmup and cosine annealing
+    # Advanced learning rate scheduler with adaptive configuration
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, 
-        max_lr=0.002, 
-        epochs=15, 
+        max_lr=config['learning_rate'], 
+        epochs=config['num_epochs'], 
         steps_per_epoch=len(train_loader),
         pct_start=0.1,  # 10% warmup
         div_factor=10,  # Initial LR = max_lr/div_factor
         final_div_factor=100  # Final LR = initial_lr/final_div_factor
     )
+    
+    # Mixed precision training setup
+    scaler = None
+    if config['use_mixed_precision']:
+        scaler = torch.amp.GradScaler('cuda')
+        print("⚡ Using mixed precision training (FP16)")
 
     if not args.test:
+        # Start training with adaptive configuration
+        train_with_config(model, train_loader, val_loader, optimizer, criterion, scheduler,
+                         device, config)
 
-        train(model, train_loader, val_loader, optimizer, criterion, scheduler,
-              device, num_epochs=15, use_mixup=True, mixup_alpha=0.4)
-
-        torch.save({'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict':optimizer.state_dict()}, 'model.ckpt')
+        # Save model
+        model_to_save = model.module if hasattr(model, 'module') else model
+        save_dict = {'model_state_dict': model_to_save.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'config': config}
+        torch.save(save_dict, 'model.ckpt')
 
     else:
         miniplaces_test = MiniPlaces(data_root,
                                      split='test',
                                      transform=val_transform)
         test_loader = DataLoader(miniplaces_test,
-                                batch_size=batch_size,
-                                num_workers=num_workers,
-                                shuffle=False)        
+                                batch_size=config['batch_size'],
+                                num_workers=config['num_workers'],
+                                shuffle=False,
+                                pin_memory=config['pin_memory'])        
         checkpoint = torch.load(args.checkpoint, weights_only=True)
         model.load_state_dict(checkpoint['model_state_dict'])
         preds = test(model, test_loader, device)

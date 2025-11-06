@@ -3,6 +3,7 @@ torch
 torchvision
 Pillow
 tqdm
+psutil
 
 # Core Jupyter and Python dependencies (keep versions for stability)
 anyio
