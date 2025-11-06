@@ -1,8 +1,8 @@
 # Data directories
-data/
 objects/
-*/data/
+images/
 */objects/
+*/images/
 
 # Virtual environments
 venv/
