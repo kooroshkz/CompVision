@@ -4,3 +4,4 @@ images/
 data/
 objects/
 *.tar.gz
+*.ckpt
