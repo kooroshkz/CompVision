@@ -2,3 +2,7 @@ torch
 torchvision
 pandas
 Pillow
+sklearn
+seaborn
+matplotlib
+numpy
