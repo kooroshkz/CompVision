@@ -25,3 +25,5 @@ __pycache__/
 
 # Model checkpoints
 *.ckpt
+
+*.pth
