@@ -3,10 +3,12 @@ objects/
 images/
 */objects/
 */images/
+A3/data/videos/
 
 # Virtual environments
 venv/
 env/
+.venv/
 
 # System files
 .DS_Store
