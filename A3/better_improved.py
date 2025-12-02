@@ -9,9 +9,9 @@ import os
 from PIL import Image
 
 
-# ===== Improved Dataset: EVEN sampling of 8 frames =====
+# ===== Improved Dataset: EVEN sampling 12 frames =====
 class JesterDatasetMulti(Dataset):
-    def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=8):
+    def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=12):
         self.df = pd.read_csv(csv_path, sep=";", header=None)
         self.video_dir = video_dir
         self.transform = transform
@@ -19,6 +19,9 @@ class JesterDatasetMulti(Dataset):
 
         self.labels = open(labels_path).read().splitlines()
         self.label_map = {name: i for i, name in enumerate(self.labels)}
+
+        # light augmentation (safe)
+        self.augment = T.ColorJitter(brightness=0.2, contrast=0.2)
 
     def __len__(self):
         return len(self.df)
@@ -36,27 +39,32 @@ class JesterDatasetMulti(Dataset):
             step = total // self.num_frames
             selected = [frames[i * step] for i in range(self.num_frames)]
         else:
-            # pad last frame if video has fewer than num_frames
             selected = frames + [frames[-1]] * (self.num_frames - total)
 
         imgs = []
         for f in selected:
             img_path = os.path.join(self.video_dir, vid_id, f)
             img = Image.open(img_path).convert("RGB")
+
+            # resize + crop = BEST practice
             if self.transform:
                 img = self.transform(img)
+
+            # safe jitter: brightness + contrast only
+            img = self.augment(img)
+
             imgs.append(img)
 
-        # shape [8, 3, H, W]
+        # [F, 3, H, W]
         imgs = torch.stack(imgs)
         return imgs, torch.tensor(label)
 
 
-# ===== Improved Model: average frame logits =====
-class MultiFrameResNet(nn.Module):
+# ===== Improved Model: ResNet34 + temporal averaging =====
+class MultiFrameResNet34(nn.Module):
     def __init__(self, num_classes=27):
         super().__init__()
-        self.backbone = models.resnet18(weights="IMAGENET1K_V1")
+        self.backbone = models.resnet34(weights="IMAGENET1K_V1")
         self.backbone.fc = nn.Linear(512, num_classes)
 
     def forward(self, x):
@@ -72,7 +80,8 @@ def main():
     print("Using:", device)
 
     transform = T.Compose([
-        T.Resize((224, 224)),
+        T.Resize(256),
+        T.CenterCrop(224),
         T.ToTensor()
     ])
 
@@ -81,16 +90,16 @@ def main():
         video_dir="data/videos",
         labels_path="data/jester-v1-labels.csv",
         transform=transform,
-        num_frames=8
+        num_frames=12          # best option
     )
 
-    train_loader = DataLoader(train_set, batch_size=8, shuffle=True)
+    train_loader = DataLoader(train_set, batch_size=6, shuffle=True)  # ResNet34 uses more memory
 
-    model = MultiFrameResNet().to(device)
+    model = MultiFrameResNet34().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-    for epoch in range(5):  # same training length
+    for epoch in range(6):   # small extra training helps ResNet34
         model.train()
         total_loss = 0
 
@@ -99,8 +108,8 @@ def main():
             labels = labels.to(device)
 
             optimizer.zero_grad()
-            outputs = model(imgs)
-            loss = criterion(outputs, labels)
+            out = model(imgs)
+            loss = criterion(out, labels)
             loss.backward()
             optimizer.step()
 
@@ -108,8 +117,8 @@ def main():
 
         print("Epoch:", epoch, "Loss:", total_loss / len(train_loader))
 
-    torch.save(model.state_dict(), "improved_model.pth")
-    print("Saved improved_model.pth")
+    torch.save(model.state_dict(), "improved_model_final.pth")
+    print("Saved improved_model_final.pth")
 
 
 if __name__ == "__main__":
