@@ -36,7 +36,6 @@ class JesterDatasetMulti(Dataset):
             step = total // self.num_frames
             selected = [frames[i * step] for i in range(self.num_frames)]
         else:
-            # pad last frame if video has fewer than num_frames
             selected = frames + [frames[-1]] * (self.num_frames - total)
 
         imgs = []
@@ -47,12 +46,10 @@ class JesterDatasetMulti(Dataset):
                 img = self.transform(img)
             imgs.append(img)
 
-        # shape [8, 3, H, W]
-        imgs = torch.stack(imgs)
-        return imgs, torch.tensor(label)
+        return torch.stack(imgs), torch.tensor(label)
 
 
-# ===== Improved Model: average frame logits =====
+# ===== Improved Model: ResNet18 averaged over frames =====
 class MultiFrameResNet(nn.Module):
     def __init__(self, num_classes=27):
         super().__init__()
@@ -60,7 +57,7 @@ class MultiFrameResNet(nn.Module):
         self.backbone.fc = nn.Linear(512, num_classes)
 
     def forward(self, x):
-        B, F, C, H, W = x.shape
+        B, F, C, H, W = x.size()
         x = x.view(B * F, C, H, W)
         logits = self.backbone(x)
         logits = logits.view(B, F, -1)
@@ -76,21 +73,24 @@ def main():
         T.ToTensor()
     ])
 
+    # ===== FULL TRAINING SET =====
     train_set = JesterDatasetMulti(
-        csv_path="data/jester-v1-small-train.csv",
+        csv_path="data/jester-v1-train.csv",
         video_dir="data/videos",
         labels_path="data/jester-v1-labels.csv",
         transform=transform,
         num_frames=8
     )
 
-    train_loader = DataLoader(train_set, batch_size=8, shuffle=True)
+    train_loader = DataLoader(train_set, batch_size=16, shuffle=True)
 
     model = MultiFrameResNet().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-    for epoch in range(5):  # same training length
+    EPOCHS = 20  # <<< increased epochs
+
+    for epoch in range(EPOCHS):
         model.train()
         total_loss = 0
 
@@ -106,10 +106,14 @@ def main():
 
             total_loss += loss.item()
 
-        print("Epoch:", epoch, "Loss:", total_loss / len(train_loader))
+        print(f"Epoch {epoch}: Loss = {total_loss / len(train_loader)}")
 
-    torch.save(model.state_dict(), "improved_model.pth")
-    print("Saved improved_model.pth")
+        # optional: save checkpoints every 5 epochs
+        if epoch % 5 == 0:
+            torch.save(model.state_dict(), f"improved_epoch{epoch}.pth")
+
+    torch.save(model.state_dict(), "improved_model_fullset.pth")
+    print("Saved improved_model_fullset.pth")
 
 
 if __name__ == "__main__":

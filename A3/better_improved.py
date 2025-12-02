@@ -3,38 +3,41 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
-import torchvision.models as models
+import torchvision.models.video as video_models
 import pandas as pd
 import os
+import random
 from PIL import Image
 
 
-# ===== Improved Dataset: EVEN sampling 12 frames =====
-class JesterDatasetMulti(Dataset):
-    def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=12):
+# ===============================================================
+# DATASET: EVEN SAMPLING + 16 FRAMES + LIGHT AUGMENTATION
+# ===============================================================
+class JesterDataset3D(Dataset):
+    def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=16, augment=True):
         self.df = pd.read_csv(csv_path, sep=";", header=None)
         self.video_dir = video_dir
         self.transform = transform
         self.num_frames = num_frames
+        self.augment = augment
 
         self.labels = open(labels_path).read().splitlines()
         self.label_map = {name: i for i, name in enumerate(self.labels)}
 
-        # light augmentation (safe)
-        self.augment = T.ColorJitter(brightness=0.2, contrast=0.2)
+        # Light augmentation
+        self.aug_tf = T.ColorJitter(brightness=0.2, contrast=0.2) if augment else None
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
         vid_id = str(self.df.iloc[idx, 0])
-        label_name = self.df.iloc[idx, 1]
-        label = self.label_map[label_name]
+        label = self.label_map[self.df.iloc[idx, 1]]
 
         frames = sorted(os.listdir(os.path.join(self.video_dir, vid_id)))
         total = len(frames)
 
-        # ===== EVEN SAMPLING =====
+        # Even sampling
         if total >= self.num_frames:
             step = total // self.num_frames
             selected = [frames[i * step] for i in range(self.num_frames)]
@@ -43,82 +46,86 @@ class JesterDatasetMulti(Dataset):
 
         imgs = []
         for f in selected:
-            img_path = os.path.join(self.video_dir, vid_id, f)
-            img = Image.open(img_path).convert("RGB")
-
-            # resize + crop = BEST practice
+            img = Image.open(os.path.join(self.video_dir, vid_id, f)).convert("RGB")
+            if self.aug_tf:
+                img = self.aug_tf(img)
             if self.transform:
                 img = self.transform(img)
-
-            # safe jitter: brightness + contrast only
-            img = self.augment(img)
-
             imgs.append(img)
 
-        # [F, 3, H, W]
-        imgs = torch.stack(imgs)
-        return imgs, torch.tensor(label)
+        # shape: [C, T, H, W]
+        frames_tensor = torch.stack(imgs).permute(1, 0, 2, 3)
+
+        return frames_tensor, torch.tensor(label)
 
 
-# ===== Improved Model: ResNet34 + temporal averaging =====
-class MultiFrameResNet34(nn.Module):
+# ===============================================================
+# MODEL: R3D-18 (3D RESNET)
+# ===============================================================
+class R3DModel(nn.Module):
     def __init__(self, num_classes=27):
         super().__init__()
-        self.backbone = models.resnet34(weights="IMAGENET1K_V1")
-        self.backbone.fc = nn.Linear(512, num_classes)
+        self.net = video_models.r3d_18(weights=None)
+        self.net.fc = nn.Linear(512, num_classes)
 
     def forward(self, x):
-        B, F, C, H, W = x.shape
-        x = x.view(B * F, C, H, W)
-        logits = self.backbone(x)
-        logits = logits.view(B, F, -1)
-        return logits.mean(dim=1)
+        return self.net(x)
 
 
+# ===============================================================
+# TRAINING LOOP
+# ===============================================================
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using:", device)
 
     transform = T.Compose([
-        T.Resize(256),
-        T.CenterCrop(224),
+        T.Resize((112, 112)),   # recommended for 3D ResNet
         T.ToTensor()
     ])
 
-    train_set = JesterDatasetMulti(
-        csv_path="data/jester-v1-small-train.csv",
+    # FULL BIG TRAIN SET
+    train_set = JesterDataset3D(
+        csv_path="data/jester-v1-train.csv",
         video_dir="data/videos",
         labels_path="data/jester-v1-labels.csv",
         transform=transform,
-        num_frames=12          # best option
+        num_frames=16,
+        augment=True
     )
 
-    train_loader = DataLoader(train_set, batch_size=6, shuffle=True)  # ResNet34 uses more memory
+    train_loader = DataLoader(train_set, batch_size=4, shuffle=True)
 
-    model = MultiFrameResNet34().to(device)
+    model = R3DModel().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-    for epoch in range(6):   # small extra training helps ResNet34
+    EPOCHS = 20
+
+    for epoch in range(EPOCHS):
         model.train()
         total_loss = 0
 
-        for imgs, labels in train_loader:
-            imgs = imgs.to(device)
+        for vid, labels in train_loader:
+            vid = vid.to(device)
             labels = labels.to(device)
 
             optimizer.zero_grad()
-            out = model(imgs)
-            loss = criterion(out, labels)
+            outputs = model(vid)
+            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
 
-        print("Epoch:", epoch, "Loss:", total_loss / len(train_loader))
+        print(f"Epoch {epoch}: Loss = {total_loss / len(train_loader)}")
 
-    torch.save(model.state_dict(), "improved_model_final.pth")
-    print("Saved improved_model_final.pth")
+        # Save safe checkpoints
+        if epoch % 5 == 0:
+            torch.save(model.state_dict(), f"final_model_epoch{epoch}.pth")
+
+    torch.save(model.state_dict(), "final_model_fullset.pth")
+    print("Saved final_model_fullset.pth")
 
 
 if __name__ == "__main__":
