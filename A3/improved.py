@@ -9,10 +9,8 @@ import os
 from PIL import Image
 import numpy as np
 
+# My Latest changes and experiments : EVEN SAMPLING + 16 FRAMES + LIGHT AUGMENTATION
 
-# ===============================================================
-# DATASET: EVEN SAMPLING + 16 FRAMES + LIGHT AUGMENTATION
-# ===============================================================
 class JesterDataset3D(Dataset):
     def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=16, augment=True):
         self.df = pd.read_csv(csv_path, sep=";", header=None)
@@ -58,10 +56,7 @@ class JesterDataset3D(Dataset):
         return frames_tensor, torch.tensor(label)
 
 
-# ===============================================================
-# MODEL: R3D-18 (3D RESNET)
-# ===============================================================
-class R3DModel(nn.Module):
+class R3DModel(nn.Module): # Final model R3D-18 (3D RESNET)
     def __init__(self, num_classes=27):
         super().__init__()
         self.net = video_models.r3d_18(weights=None)
@@ -70,10 +65,6 @@ class R3DModel(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-
-# ===============================================================
-# VALIDATION
-# ===============================================================
 def validate(model, device, labels_list):
     print("\nRunning validation...")
 
@@ -125,10 +116,6 @@ def validate(model, device, labels_list):
 
     return accuracy
 
-
-# ===============================================================
-# TRAIN + VALIDATE
-# ===============================================================
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using:", device)
@@ -174,14 +161,12 @@ def main():
 
         print(f"Epoch {epoch}: Loss = {total_loss / len(train_loader)}")
 
-        # Save checkpoints
         if epoch % 5 == 0:
             torch.save(model.state_dict(), f"final_model_epoch{epoch}.pth")
 
     torch.save(model.state_dict(), "final_model_fullset.pth")
     print("Saved final_model_fullset.pth")
 
-    # ====== VALIDATE ======
     labels_list = train_set.labels
     validate(model, device, labels_list)
 

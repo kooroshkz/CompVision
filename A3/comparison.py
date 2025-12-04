@@ -11,10 +11,6 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from sklearn.metrics import confusion_matrix
 
-
-# ============================================================
-# DATASET (reused)
-# ============================================================
 class JesterDataset3D(torch.utils.data.Dataset):
     def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=16):
         self.df = pd.read_csv(csv_path, sep=";", header=None)
@@ -53,9 +49,6 @@ class JesterDataset3D(torch.utils.data.Dataset):
         return video_tensor, torch.tensor(label)
 
 
-# ============================================================
-# MODELS
-# ============================================================
 import torchvision.models.video as video_models
 
 class R3DModel(nn.Module):
@@ -86,9 +79,6 @@ class Baseline2D(nn.Module):
         return logits
 
 
-# ============================================================
-# EVAL FUNCTION
-# ============================================================
 def run_eval(model, loader, device):
     model.eval()
     preds, trues = [], []
@@ -106,16 +96,12 @@ def run_eval(model, loader, device):
 
     return np.array(preds), np.array(trues)
 
-
-# ============================================================
-# MAIN
-# ============================================================
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using:", device)
 
     transform = T.Compose([
-        T.Resize((224, 224)),  # Match the baseline training size
+        T.Resize((224, 224)),
         T.ToTensor()
     ])
 
@@ -130,23 +116,16 @@ def main():
     loader = DataLoader(val_set, batch_size=2, shuffle=False)
     labels = val_set.labels
 
-    # ===== Load models =====
     baseline = Baseline2D().to(device)
     improved = R3DModel().to(device)
 
     baseline.load_state_dict(torch.load("baseline_model.pth", map_location=device))
     improved.load_state_dict(torch.load("final_model_fullset.pth", map_location=device))
 
-    # ===== Evaluate =====
-    print("Running baseline...")
     b_preds, b_trues = run_eval(baseline, loader, device)
 
-    print("Running improved model...")
     i_preds, i_trues = run_eval(improved, loader, device)
 
-    # ============================================================
-    # Confusion Matrices (side-by-side)
-    # ============================================================
     plt.figure(figsize=(18, 7))
 
     for idx, (preds, trues, title) in enumerate([
@@ -161,9 +140,6 @@ def main():
     plt.savefig("compare_confusion_matrices.png")
     print("Saved compare_confusion_matrices.png")
 
-    # ============================================================
-    # Per-class accuracy comparison
-    # ============================================================
     b_acc = []
     i_acc = []
 
@@ -188,14 +164,10 @@ def main():
     plt.savefig("compare_per_class_accuracy.png")
     print("Saved compare_per_class_accuracy.png")
 
-    # ============================================================
-    # Biggest Improvements
-    # ============================================================
     diff = np.array(i_acc) - np.array(b_acc)
     top5 = diff.argsort()[-5:][::-1]
     worst5 = diff.argsort()[:5]
 
-    # plot best improvements
     plt.figure(figsize=(7,5))
     plt.barh([labels[i] for i in top5], diff[top5], color="green")
     plt.title("Top-5 Most Improved Classes")
@@ -204,7 +176,6 @@ def main():
     plt.savefig("compare_top5_improved.png")
     print("Saved compare_top5_improved.png")
 
-    # plot biggest drops (if any)
     plt.figure(figsize=(7,5))
     plt.barh([labels[i] for i in worst5], diff[worst5], color="red")
     plt.title("Top-5 Accuracy Decreases")

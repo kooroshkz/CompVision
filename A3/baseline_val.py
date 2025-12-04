@@ -11,8 +11,6 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-
-# === same dataset class as training ===
 class JesterDataset(Dataset):
     def __init__(self, csv_path, video_dir, labels_path, transform=None):
         self.df = pd.read_csv(csv_path, sep=";", header=None)
@@ -41,8 +39,6 @@ class JesterDataset(Dataset):
 
         return img, label
 
-
-# === baseline model again ===
 import torchvision.models as models
 
 class BaselineCNN(nn.Module):
@@ -96,12 +92,10 @@ def main():
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
 
-    # overall accuracy
-    accuracy = (all_preds == all_labels).mean()
+    accuracy = (all_preds == all_labels).mean() # Overall
     print("Validation Accuracy:", round(accuracy * 100, 2), "%")
 
-    # per-class accuracy
-    labels_list = val_set.labels
+    labels_list = val_set.labels    # per-class accuracy
     per_class = {}
 
     for i, name in enumerate(labels_list):
@@ -114,7 +108,6 @@ def main():
     for k, v in per_class.items():
         print(k, ":", round(v * 100, 2), "%")
 
-    # Confusion matrix
     cm = confusion_matrix(all_labels, all_preds)
 
     plt.figure(figsize=(12, 10))

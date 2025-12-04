@@ -13,9 +13,6 @@ import matplotlib.pyplot as plt
 import torchvision.models.video as video_models
 
 
-# ===============================================================
-# DATASET (same as training)
-# ===============================================================
 class JesterDataset3D(Dataset):
     def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=16):
         self.df = pd.read_csv(csv_path, sep=";", header=None)
@@ -53,10 +50,6 @@ class JesterDataset3D(Dataset):
         vid_tensor = torch.stack(imgs).permute(1, 0, 2, 3)   # [C,T,H,W]
         return vid_tensor, torch.tensor(label)
 
-
-# ===============================================================
-# MODEL (3D ResNet)
-# ===============================================================
 class R3DModel(nn.Module):
     def __init__(self, num_classes=27):
         super().__init__()
@@ -66,10 +59,6 @@ class R3DModel(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-
-# ===============================================================
-# MAIN: LOAD MODEL, EVALUATE, MAKE VISUALS
-# ===============================================================
 def main():
     print("=== Generating visuals ===")
 
@@ -80,7 +69,6 @@ def main():
         T.ToTensor()
     ])
 
-    # ------------ Load validation set ------------
     val_set = JesterDataset3D(
         csv_path="data/jester-v1-validation.csv",
         video_dir="data/videos",
@@ -90,7 +78,6 @@ def main():
     )
     val_loader = DataLoader(val_set, batch_size=4, shuffle=False)
 
-    # ------------ Load trained model ------------
     model = R3DModel()
     model.load_state_dict(torch.load("final_model_fullset.pth", map_location=device))
     model = model.to(device)
@@ -117,9 +104,6 @@ def main():
     labels_list = val_set.labels
 
 
-    # ===============================================================
-    # 1. CONFUSION MATRIX
-    # ===============================================================
     cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(15, 12))
     sns.heatmap(cm, cmap="Blues")
@@ -129,10 +113,6 @@ def main():
     plt.savefig("vis_confusion_matrix.png")
     print("Saved vis_confusion_matrix.png")
 
-
-    # ===============================================================
-    # 2. PER-CLASS ACCURACY BAR CHART
-    # ===============================================================
     per_class_acc = []
     for i, name in enumerate(labels_list):
         mask = all_labels == i
@@ -149,9 +129,6 @@ def main():
     print("Saved vis_per_class_accuracy.png")
 
 
-    # ===============================================================
-    # 3. TOP-5 EASIEST CLASSES
-    # ===============================================================
     easiest_idx = np.argsort(per_class_acc)[-5:]
     easiest_names = [labels_list[i] for i in easiest_idx]
     easiest_vals = [per_class_acc[i] for i in easiest_idx]
@@ -164,10 +141,6 @@ def main():
     plt.savefig("vis_top5_easiest.png")
     print("Saved vis_top5_easiest.png")
 
-
-    # ===============================================================
-    # 4. TOP-5 HARDEST CLASSES
-    # ===============================================================
     hardest_idx = np.argsort(per_class_acc)[:5]
     hardest_names = [labels_list[i] for i in hardest_idx]
     hardest_vals = [per_class_acc[i] for i in hardest_idx]
@@ -179,15 +152,6 @@ def main():
     plt.tight_layout()
     plt.savefig("vis_top5_hardest.png")
     print("Saved vis_top5_hardest.png")
-
-
-    # ===============================================================
-    # 5. TRAINING LOSS (placeholder if needed)
-    # ===============================================================
-    # If you saved epoch losses in a txt/csv, you can load them here
-    # Example:
-    # losses = np.loadtxt("loss_log.txt")
-    # plt.plot(losses)
 
     print("\n=== All visuals saved successfully ===")
 

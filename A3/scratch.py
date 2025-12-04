@@ -10,10 +10,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+## This file is my failed attempt to build a 3D CNN from scratch.
 
-# ======================================================
-# DATASET: EVEN SAMPLING OF FRAMES
-# ======================================================
 class JesterDatasetMulti(Dataset):
     def __init__(self, csv_path, video_dir, labels_path, transform=None, num_frames=8):
         self.df = pd.read_csv(csv_path, sep=";", header=None)
@@ -51,10 +49,6 @@ class JesterDatasetMulti(Dataset):
 
         return torch.stack(imgs), torch.tensor(label, dtype=torch.long)
 
-
-# ======================================================
-# 3D CNN FROM SCRATCH (Improved architecture)
-# ======================================================
 class Simple3DCNN(nn.Module):
     def __init__(self, num_classes=27):
         super().__init__()
@@ -98,9 +92,6 @@ class Simple3DCNN(nn.Module):
         return self.fc(x)
 
 
-# ======================================================
-# VALIDATION FUNCTION
-# ======================================================
 def validate(model, loader, labels, device):
     model.eval()
     correct = 0
@@ -135,7 +126,6 @@ def validate(model, loader, labels, device):
     accuracy = 100.0 * correct / total
     print(f"\nValidation Accuracy: {accuracy:.2f}%\n")
 
-    # Per-class accuracy
     print("Per-class accuracy:")
     for i, name in enumerate(labels):
         if class_total[i] > 0:
@@ -144,7 +134,6 @@ def validate(model, loader, labels, device):
             acc = 0.0
         print(f"{name}: {acc:.2f}%")
 
-    # Confusion Matrix
     cm = np.zeros((num_classes, num_classes), dtype=np.int32)
     for t, p in zip(all_targets, all_preds):
         cm[t][p] += 1
@@ -160,9 +149,6 @@ def validate(model, loader, labels, device):
     return accuracy
 
 
-# ======================================================
-# TRAIN + VALIDATE
-# ======================================================
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using:", device)
